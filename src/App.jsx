@@ -290,7 +290,7 @@ const COMPLETE_ROADMAP = {
 };
 
 export default function App() {
-  const [progress, setProgress] = useState({});
+  const [completedTopics, setCompletedTopics] = useState([]);
   const [leetcodeCount, setLeetcodeCount] = useState(0);
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedCategories, setSelectedCategories] = useState([]);
@@ -306,20 +306,35 @@ export default function App() {
     });
   }
 
-  async function saveProgress(topicId, isCompleted) {
+  async function toggleTopic(topicId) {
     try {
       const { data: { user } } = await supabase.auth.getUser();
       if (!user) return;
 
-      await supabase
-        .from('progress')
-        .upsert({
-          user_id: user.id,
-          topic_id: topicId,
-          completed: isCompleted
-        }, { onConflict: 'user_id,topic_id' });
+      const isCompleted = completedTopics.includes(topicId);
+      
+      // Optimistic UI update
+      if (isCompleted) {
+        setCompletedTopics(prev => prev.filter(id => id !== topicId));
+        await supabase
+          .from('progress')
+          .delete()
+          .eq('user_id', user.id)
+          .eq('topic_id', topicId);
+      } else {
+        setCompletedTopics(prev => [...prev, topicId]);
+        await supabase
+          .from('progress')
+          .insert({
+            user_id: user.id,
+            topic_id: topicId,
+            completed: true
+          });
+      }
     } catch (error) {
-      console.error('Save error:', error);
+      console.error('Toggle error:', error);
+      // Revert state if error (optional, but good practice)
+      loadProgress();
     }
   }
 
@@ -337,16 +352,14 @@ export default function App() {
 
       const { data, error } = await supabase
         .from('progress')
-        .select('topic_id, completed')
+        .select('topic_id')
         .eq('user_id', user.id);
 
       if (error) throw error;
 
-      const progressMap = {};
-      data.forEach(item => {
-        progressMap[item.topic_id] = item.completed;
-      });
-      setProgress(progressMap);
+      if (data) {
+        setCompletedTopics(data.map(item => item.topic_id));
+      }
 
       const lc = await window.storage.get('roadmap_leetcode');
       if (lc?.value) setLeetcodeCount(parseInt(lc.value));
@@ -368,15 +381,6 @@ export default function App() {
     if (!loading) saveLegacyProgress();
   }, [leetcodeCount]);
 
-  const toggleTopic = (topicId) => {
-    const isCompleted = !progress[topicId];
-    setProgress(prev => ({
-      ...prev,
-      [topicId]: isCompleted
-    }));
-    saveProgress(topicId, isCompleted);
-  };
-
   const calculateProgress = () => {
     let earnedPoints = 0;
     let totalPoints = 0;
@@ -390,7 +394,7 @@ export default function App() {
       category.topics?.forEach(topic => {
         totalPoints += topic.points;
         totalHours += topic.hours;
-        if (progress[topic.id]) {
+        if (completedTopics.includes(topic.id)) {
           earnedPoints += topic.points;
           earnedHours += topic.hours;
         }
@@ -422,7 +426,7 @@ export default function App() {
     const category = COMPLETE_ROADMAP[categoryKey];
     if (!category.topics) return { completed: 0, total: 0, percentage: 0 };
 
-    const completedCount = category.topics.filter(t => progress[t.id]).length;
+    const completedCount = category.topics.filter(t => completedTopics.includes(t.id)).length;
     return {
       completed: completedCount,
       total: category.topics.length,
@@ -437,7 +441,7 @@ export default function App() {
       if (catKey === 'dsa_leetcode' || !category.topics) return;
 
       category.topics.forEach(topic => {
-        const isCompleted = progress[topic.id] || false;
+        const isCompleted = completedTopics.includes(topic.id);
         const matchesSearch = searchQuery === '' ||
           topic.name.toLowerCase().includes(searchQuery.toLowerCase());
         const matchesCategory = selectedCategories.length === 0 ||
@@ -644,7 +648,7 @@ export default function App() {
               >
                 <input
                   type="checkbox"
-                  checked={progress[topic.id] || false}
+                  checked={completedTopics.includes(topic.id)}
                   onChange={() => toggleTopic(topic.id)}
                   className="w-5 h-5 rounded bg-gray-800 border-gray-700"
                 />

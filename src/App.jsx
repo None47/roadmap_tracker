@@ -1,6 +1,5 @@
 import React, { useState, useEffect } from 'react';
 import { Search, Filter, TrendingUp, Target, Calendar, Award, BookOpen, Code, Brain, Zap } from 'lucide-react';
-import { supabase } from './supabaseClient';
 
 // Complete roadmap data structure based on the uploaded images
 const COMPLETE_ROADMAP = {
@@ -290,129 +289,44 @@ const COMPLETE_ROADMAP = {
 };
 
 export default function App() {
-  const [user, setUser] = useState(null);
-  const [completedTopics, setCompletedTopics] = useState([]);
-  const [leetcodeCount, setLeetcodeCount] = useState(0);
+  const [completedTopics, setCompletedTopics] = useState(() => {
+    try {
+      const saved = localStorage.getItem("roadmap-progress")
+      return saved ? JSON.parse(saved) : []
+    } catch {
+      return []
+    }
+  });
+  const [leetcodeCount, setLeetcodeCount] = useState(() => {
+    const saved = localStorage.getItem("roadmap-leetcode");
+    return saved ? parseInt(saved) : 0;
+  });
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedCategories, setSelectedCategories] = useState([]);
-  const [view, setView] = useState('grid'); // grid, list, timeline
+  const [view, setView] = useState('grid');
   const [showCompleted, setShowCompleted] = useState(true);
   const [showIncomplete, setShowIncomplete] = useState(true);
-  const [sortBy, setSortBy] = useState('category'); // category, hours, points
-  const [loading, setLoading] = useState(true);
+  const [sortBy, setSortBy] = useState('category');
+  const [loading, setLoading] = useState(false);
 
-  async function login() {
-    await supabase.auth.signInWithOAuth({
-      provider: "google",
-    });
-  }
-
-  async function toggleTopic(topicId) {
-    if (!user) return;
-    try {
-
-      const isCompleted = completedTopics.includes(topicId);
-      
-      // Optimistic UI update
-      if (isCompleted) {
-        setCompletedTopics(prev => prev.filter(id => id !== topicId));
-        await supabase
-          .from('progress')
-          .delete()
-          .eq('user_id', user.id)
-          .eq('topic_id', topicId);
+  const toggleTopic = (topicId) => {
+    setCompletedTopics(prev => {
+      let updated
+      if (prev.includes(topicId)) {
+        updated = prev.filter(id => id !== topicId)
       } else {
-        setCompletedTopics(prev => [...prev, topicId]);
-        await supabase
-          .from('progress')
-          .insert({
-            user_id: user.id,
-            topic_id: topicId,
-            completed: true
-          });
+        updated = [...prev, topicId]
       }
-    } catch (error) {
-      console.error('Toggle error:', error);
-      // Revert state if error (optional, but good practice)
-      loadProgress();
-    }
+      localStorage.setItem("roadmap-progress", JSON.stringify(updated))
+      return updated
+    })
   }
 
   useEffect(() => {
-    // Check for errors in URL (e.g. OAuth failures)
-    const params = new URLSearchParams(window.location.search);
-    if (params.get('error')) {
-      console.error('Auth error:', params.get('error_description'));
-    }
-
-    // Clean up URL parameters after login
-    if (window.location.hash || window.location.search.includes('code=')) {
-      const cleanUrl = window.location.origin + window.location.pathname;
-      window.history.replaceState({}, document.title, cleanUrl);
-    }
-
-    // Get initial session
-    supabase.auth.getSession().then(({ data: { session } }) => {
-      setUser(session?.user ?? null);
-      if (session?.user) {
-        loadProgress(session.user);
-      } else {
-        setLoading(false);
-      }
-    });
-
-    // Listen for auth changes
-    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
-      setUser(session?.user ?? null);
-      if (session?.user) {
-        loadProgress(session.user);
-      } else {
-        setCompletedTopics([]);
-        setLoading(false);
-      }
-    });
-
-    return () => subscription.unsubscribe();
-  }, []);
-
-  async function loadProgress(currentUser) {
-    try {
-      const activeUser = currentUser || user;
-      if (!activeUser) {
-        setLoading(false);
-        return;
-      }
-
-      const { data, error } = await supabase
-        .from('progress')
-        .select('topic_id')
-        .eq('user_id', activeUser.id);
-
-      if (error) throw error;
-
-      if (data) {
-        setCompletedTopics(data.map(item => item.topic_id));
-      }
-
-      const lc = await window.storage.get('roadmap_leetcode');
-      if (lc?.value) setLeetcodeCount(parseInt(lc.value));
-    } catch (error) {
-      console.log('Error loading progress:', error);
-    }
-    setLoading(false);
-  }
-
-  async function saveLegacyProgress() {
-    try {
-      await window.storage.set('roadmap_leetcode', leetcodeCount.toString());
-    } catch (error) {
-      console.error('Save error:', error);
-    }
-  }
-
-  useEffect(() => {
-    if (!loading) saveLegacyProgress();
+    localStorage.setItem("roadmap-leetcode", leetcodeCount.toString());
   }, [leetcodeCount]);
+
+
 
   const calculateProgress = () => {
     let earnedPoints = 0;
@@ -534,14 +448,6 @@ export default function App() {
 
   return (
     <div className="min-h-screen bg-black text-white">
-      {/* Login Button */}
-      <button
-        onClick={login}
-        className="fixed top-6 right-6 z-[60] bg-green-600 hover:bg-green-700 text-white font-medium py-2 px-4 rounded-lg shadow-lg shadow-green-900/20 transition-all active:scale-95 flex items-center gap-2 group"
-      >
-        <Zap className="w-4 h-4 text-green-300 group-hover:animate-pulse" />
-        <span>Login with Google</span>
-      </button>
 
       {/* Header */}
       <div className="sticky top-0 z-50 bg-black/95 backdrop-blur border-b border-gray-800">
@@ -681,11 +587,9 @@ export default function App() {
               >
                 <input
                   type="checkbox"
-                  disabled={!user}
-                  title={!user ? "Login required to track progress" : ""}
                   checked={completedTopics.includes(topic.id)}
                   onChange={() => toggleTopic(topic.id)}
-                  className={`w-5 h-5 rounded bg-gray-800 border-gray-700 ${!user ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer'}`}
+                  className="w-5 h-5 rounded bg-gray-800 border-gray-700 cursor-pointer"
                 />
                 <div className="flex-1">
                   <div className={`text-sm ${topic.isCompleted ? 'line-through text-gray-600' : 'text-gray-300'}`}>

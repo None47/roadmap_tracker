@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { Search, Filter, TrendingUp, Target, Calendar, Award, BookOpen, Code, Brain, Zap } from 'lucide-react';
+import { supabase } from './supabaseClient';
 
 // Complete roadmap data structure based on the uploaded images
 const COMPLETE_ROADMAP = {
@@ -289,7 +290,7 @@ const COMPLETE_ROADMAP = {
 };
 
 export default function App() {
-  const [completed, setCompleted] = useState(new Set());
+  const [progress, setProgress] = useState({});
   const [leetcodeCount, setLeetcodeCount] = useState(0);
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedCategories, setSelectedCategories] = useState([]);
@@ -299,48 +300,81 @@ export default function App() {
   const [sortBy, setSortBy] = useState('category'); // category, hours, points
   const [loading, setLoading] = useState(true);
 
-  useEffect(() => {
-    loadProgress();
-  }, []);
-
-  async function loadProgress() {
-    try {
-      const [comp, lc] = await Promise.all([
-        window.storage.get('roadmap_completed'),
-        window.storage.get('roadmap_leetcode')
-      ]);
-
-      if (comp?.value) setCompleted(new Set(JSON.parse(comp.value)));
-      if (lc?.value) setLeetcodeCount(parseInt(lc.value));
-    } catch (error) {
-      console.log('Starting fresh');
-    }
-    setLoading(false);
+  async function login() {
+    await supabase.auth.signInWithOAuth({
+      provider: "google",
+    });
   }
 
-  async function saveProgress() {
+  async function saveProgress(topicId, isCompleted) {
     try {
-      await Promise.all([
-        window.storage.set('roadmap_completed', JSON.stringify([...completed])),
-        window.storage.set('roadmap_leetcode', leetcodeCount.toString())
-      ]);
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) return;
+
+      await supabase
+        .from('progress')
+        .upsert({
+          user_id: user.id,
+          topic_id: topicId,
+          completed: isCompleted
+        }, { onConflict: 'user_id,topic_id' });
     } catch (error) {
       console.error('Save error:', error);
     }
   }
 
   useEffect(() => {
-    if (!loading) saveProgress();
-  }, [completed, leetcodeCount]);
+    loadProgress();
+  }, []);
+
+  async function loadProgress() {
+    try {
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) {
+        setLoading(false);
+        return;
+      }
+
+      const { data, error } = await supabase
+        .from('progress')
+        .select('topic_id, completed')
+        .eq('user_id', user.id);
+
+      if (error) throw error;
+
+      const progressMap = {};
+      data.forEach(item => {
+        progressMap[item.topic_id] = item.completed;
+      });
+      setProgress(progressMap);
+
+      const lc = await window.storage.get('roadmap_leetcode');
+      if (lc?.value) setLeetcodeCount(parseInt(lc.value));
+    } catch (error) {
+      console.log('Error loading progress:', error);
+    }
+    setLoading(false);
+  }
+
+  async function saveLegacyProgress() {
+    try {
+      await window.storage.set('roadmap_leetcode', leetcodeCount.toString());
+    } catch (error) {
+      console.error('Save error:', error);
+    }
+  }
+
+  useEffect(() => {
+    if (!loading) saveLegacyProgress();
+  }, [leetcodeCount]);
 
   const toggleTopic = (topicId) => {
-    const newCompleted = new Set(completed);
-    if (newCompleted.has(topicId)) {
-      newCompleted.delete(topicId);
-    } else {
-      newCompleted.add(topicId);
-    }
-    setCompleted(newCompleted);
+    const isCompleted = !progress[topicId];
+    setProgress(prev => ({
+      ...prev,
+      [topicId]: isCompleted
+    }));
+    saveProgress(topicId, isCompleted);
   };
 
   const calculateProgress = () => {
@@ -356,7 +390,7 @@ export default function App() {
       category.topics?.forEach(topic => {
         totalPoints += topic.points;
         totalHours += topic.hours;
-        if (completed.has(topic.id)) {
+        if (progress[topic.id]) {
           earnedPoints += topic.points;
           earnedHours += topic.hours;
         }
@@ -388,7 +422,7 @@ export default function App() {
     const category = COMPLETE_ROADMAP[categoryKey];
     if (!category.topics) return { completed: 0, total: 0, percentage: 0 };
 
-    const completedCount = category.topics.filter(t => completed.has(t.id)).length;
+    const completedCount = category.topics.filter(t => progress[t.id]).length;
     return {
       completed: completedCount,
       total: category.topics.length,
@@ -403,7 +437,7 @@ export default function App() {
       if (catKey === 'dsa_leetcode' || !category.topics) return;
 
       category.topics.forEach(topic => {
-        const isCompleted = completed.has(topic.id);
+        const isCompleted = progress[topic.id] || false;
         const matchesSearch = searchQuery === '' ||
           topic.name.toLowerCase().includes(searchQuery.toLowerCase());
         const matchesCategory = selectedCategories.length === 0 ||
@@ -433,7 +467,7 @@ export default function App() {
     return allTopics;
   };
 
-  const progress = calculateProgress();
+  const overallProgress = calculateProgress();
   const filteredTopics = filterTopics();
 
   const colorMap = {
@@ -463,30 +497,39 @@ export default function App() {
 
   return (
     <div className="min-h-screen bg-black text-white">
+      {/* Login Button */}
+      <button
+        onClick={login}
+        className="fixed top-6 right-6 z-[60] bg-green-600 hover:bg-green-700 text-white font-medium py-2 px-4 rounded-lg shadow-lg shadow-green-900/20 transition-all active:scale-95 flex items-center gap-2 group"
+      >
+        <Zap className="w-4 h-4 text-green-300 group-hover:animate-pulse" />
+        <span>Login with Google</span>
+      </button>
+
       {/* Header */}
       <div className="sticky top-0 z-50 bg-black/95 backdrop-blur border-b border-gray-800">
         <div className="max-w-7xl mx-auto px-6 py-6">
           {/* Title */}
           <div className="mb-6">
             <h1 className="text-3xl font-light tracking-tight mb-1">AI Engineer Roadmap</h1>
-            <p className="text-gray-500 text-sm">Complete path to ₹60 LPA • {progress.totalHours}+ hours total</p>
+            <p className="text-gray-500 text-sm">Complete path to ₹60 LPA • {overallProgress.totalHours}+ hours total</p>
           </div>
 
           {/* Progress Bar */}
           <div className="mb-6">
             <div className="flex justify-between items-center mb-2">
               <span className="text-sm text-gray-400">Overall Progress to ₹60L Goal</span>
-              <span className="text-3xl font-light text-green-400">{progress.percentage}%</span>
+              <span className="text-3xl font-light text-green-400">{overallProgress.percentage}%</span>
             </div>
             <div className="w-full bg-gray-900 rounded-full h-3">
               <div
                 className="h-3 rounded-full bg-gradient-to-r from-green-500 to-emerald-500 transition-all duration-500"
-                style={{ width: `${progress.percentage}%` }}
+                style={{ width: `${overallProgress.percentage}%` }}
               />
             </div>
             <div className="flex justify-between mt-2 text-xs text-gray-600">
-              <span>{progress.earned} / {progress.total} points</span>
-              <span>{progress.earnedHours} / {progress.totalHours} hours</span>
+              <span>{overallProgress.earned} / {overallProgress.total} points</span>
+              <span>{overallProgress.earnedHours} / {overallProgress.totalHours} hours</span>
             </div>
           </div>
 
@@ -575,7 +618,7 @@ export default function App() {
               +
             </button>
             <span className="text-gray-500">/ 850 target</span>
-            <span className="ml-auto text-green-400 font-light">{progress.leetcodePoints} points</span>
+            <span className="ml-auto text-green-400 font-light">{overallProgress.leetcodePoints} points</span>
           </div>
           <div className="grid grid-cols-11 gap-2">
             {COMPLETE_ROADMAP.dsa_leetcode.milestones.map((milestone) => (
@@ -601,7 +644,7 @@ export default function App() {
               >
                 <input
                   type="checkbox"
-                  checked={topic.isCompleted}
+                  checked={progress[topic.id] || false}
                   onChange={() => toggleTopic(topic.id)}
                   className="w-5 h-5 rounded bg-gray-800 border-gray-700"
                 />
@@ -631,21 +674,21 @@ export default function App() {
           <div className="flex items-center justify-between">
             <div>
               <h3 className="text-xl font-light mb-1">
-                {progress.percentage === 0 ? "Begin Your Journey" :
-                  progress.percentage < 25 ? "Building Foundation" :
-                    progress.percentage < 50 ? "Making Progress!" :
-                      progress.percentage < 75 ? "Halfway There!" :
-                        progress.percentage < 100 ? "Almost Ready!" :
+                {overallProgress.percentage === 0 ? "Begin Your Journey" :
+                  overallProgress.percentage < 25 ? "Building Foundation" :
+                    overallProgress.percentage < 50 ? "Making Progress!" :
+                      overallProgress.percentage < 75 ? "Halfway There!" :
+                        overallProgress.percentage < 100 ? "Almost Ready!" :
                           "🎉 Journey Complete!"}
               </h3>
               <p className="text-sm text-gray-400">
-                {progress.percentage < 100
-                  ? `${100 - progress.percentage}% remaining • Stay consistent and execute daily`
+                {overallProgress.percentage < 100
+                  ? `${100 - overallProgress.percentage}% remaining • Stay consistent and execute daily`
                   : "Ready for ₹60L offers! Time to apply and interview."}
               </p>
             </div>
             <div className="text-right">
-              <div className="text-3xl font-light text-green-400">{progress.percentage}%</div>
+              <div className="text-3xl font-light text-green-400">{overallProgress.percentage}%</div>
               <div className="text-xs text-gray-500">to ₹60 LPA</div>
             </div>
           </div>

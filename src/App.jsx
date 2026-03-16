@@ -290,6 +290,7 @@ const COMPLETE_ROADMAP = {
 };
 
 export default function App() {
+  const [user, setUser] = useState(null);
   const [completedTopics, setCompletedTopics] = useState([]);
   const [leetcodeCount, setLeetcodeCount] = useState(0);
   const [searchQuery, setSearchQuery] = useState('');
@@ -307,9 +308,8 @@ export default function App() {
   }
 
   async function toggleTopic(topicId) {
+    if (!user) return;
     try {
-      const { data: { user } } = await supabase.auth.getUser();
-      if (!user) return;
 
       const isCompleted = completedTopics.includes(topicId);
       
@@ -339,13 +339,46 @@ export default function App() {
   }
 
   useEffect(() => {
-    loadProgress();
+    // Check for errors in URL (e.g. OAuth failures)
+    const params = new URLSearchParams(window.location.search);
+    if (params.get('error')) {
+      console.error('Auth error:', params.get('error_description'));
+    }
+
+    // Clean up URL parameters after login
+    if (window.location.hash || window.location.search.includes('code=')) {
+      const cleanUrl = window.location.origin + window.location.pathname;
+      window.history.replaceState({}, document.title, cleanUrl);
+    }
+
+    // Get initial session
+    supabase.auth.getSession().then(({ data: { session } }) => {
+      setUser(session?.user ?? null);
+      if (session?.user) {
+        loadProgress(session.user);
+      } else {
+        setLoading(false);
+      }
+    });
+
+    // Listen for auth changes
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
+      setUser(session?.user ?? null);
+      if (session?.user) {
+        loadProgress(session.user);
+      } else {
+        setCompletedTopics([]);
+        setLoading(false);
+      }
+    });
+
+    return () => subscription.unsubscribe();
   }, []);
 
-  async function loadProgress() {
+  async function loadProgress(currentUser) {
     try {
-      const { data: { user } } = await supabase.auth.getUser();
-      if (!user) {
+      const activeUser = currentUser || user;
+      if (!activeUser) {
         setLoading(false);
         return;
       }
@@ -353,7 +386,7 @@ export default function App() {
       const { data, error } = await supabase
         .from('progress')
         .select('topic_id')
-        .eq('user_id', user.id);
+        .eq('user_id', activeUser.id);
 
       if (error) throw error;
 
@@ -648,9 +681,11 @@ export default function App() {
               >
                 <input
                   type="checkbox"
+                  disabled={!user}
+                  title={!user ? "Login required to track progress" : ""}
                   checked={completedTopics.includes(topic.id)}
                   onChange={() => toggleTopic(topic.id)}
-                  className="w-5 h-5 rounded bg-gray-800 border-gray-700"
+                  className={`w-5 h-5 rounded bg-gray-800 border-gray-700 ${!user ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer'}`}
                 />
                 <div className="flex-1">
                   <div className={`text-sm ${topic.isCompleted ? 'line-through text-gray-600' : 'text-gray-300'}`}>
